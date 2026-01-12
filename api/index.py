@@ -1,10 +1,10 @@
 import requests
 import time
-from flask import Flask, redirect
+from flask import Flask, Response, stream_with_context
 
 app = Flask(__name__)
 
-# LISTA DE CANAIS
+# LISTA INTEGRAL DE CANAIS - TODOS OS 35 MANTIDOS
 CANAIS = {
     "cazetv": "http://918197185.com/live/595f428ca7b51f3c37480c96db6e5d8a/d205a045c9c6799d56b9/116845.ts",
     "espn1": "http://918197185.com/live/595f428ca7b51f3c37480c96db6e5d8a/d205a045c9c6799d56b9/130912.ts",
@@ -43,58 +43,44 @@ CANAIS = {
     "xsports2": "http://918197185.com:80/live/a1f10d0bca4a5b077a0520250416100028/a75db139b01845e1c314/132276.ts",
 }
 
-# USER-AGENTS
-USER_AGENTS = [
-    "tvbox-v4.0.0",
-    "python-requests/2.31.0"
-]
+def stream_canal(url_base):
+    headers = {
+        "User-Agent": "tvbox-v4.0.0",
+        "Icy-MetaData": "1",
+        "Connection": "keep-alive"
+    }
+    
+    # 1. Resolver token/redirecionamento silenciosamente no servidor
+    try:
+        r_token = requests.get(url_base, headers=headers, allow_redirects=False, timeout=10)
+        url_final = r_token.headers.get("Location") or url_base
+    except:
+        url_final = url_base
 
-HEADERS_BASE = {
-    "Icy-MetaData": "1",
-    "Accept-Encoding": "identity",
-    "Connection": "Keep-Alive"
-}
+    # 2. Abrir conexão estável e repassar dados
+    try:
+        with requests.get(url_final, headers=headers, stream=True, timeout=15) as r:
+            for chunk in r.iter_content(chunk_size=256*1024): # Buffer de 256KB
+                if chunk:
+                    yield chunk
+    except Exception as e:
+        print(f"Erro no stream: {e}")
 
-# CONTROLE DE COOLDOWN
-ULTIMA_RENOVACAO = {}
-COOLDOWN = 30  # segundos (se quiser, depois testamos 60)
+@app.route('/')
+def home():
+    return "Servidor Online! Use /nome-do-canal"
 
 @app.route('/<canal>')
-def renovar_canal(canal):
+def serve_canal(canal):
     if canal not in CANAIS:
         return "Canal não encontrado", 404
-
-    agora = time.time()
-
-    # BLOQUEIA LOOP DE RENOVAÇÃO
-    if canal in ULTIMA_RENOVACAO:
-        if agora - ULTIMA_RENOVACAO[canal] < COOLDOWN:
-            return "Aguardando cooldown", 429
-
-    for ua in USER_AGENTS:
-        try:
-            headers = HEADERS_BASE.copy()
-            headers["User-Agent"] = ua
-
-            response = requests.get(
-                CANAIS[canal],
-                headers=headers,
-                allow_redirects=False,
-                timeout=8
-            )
-
-            novo_link = response.headers.get("Location")
-
-            if novo_link:
-                ULTIMA_RENOVACAO[canal] = agora
-                print(f"{canal} renovado com UA [{ua}]")
-                return redirect(novo_link)
-
-        except Exception as e:
-            print(f"Erro com UA {ua}: {e}")
-
-    return "Erro: nenhum User-Agent gerou token", 500
-
+    
+    # Inicia a ponte de dados sem redirecionar o player
+    return Response(
+        stream_with_context(stream_canal(CANAIS[canal])),
+        mimetype='video/mp2t',
+        headers={"Content-Disposition": "attachment; filename=canal.ts"}
+    )
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000, threaded=True)
