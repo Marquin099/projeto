@@ -4,7 +4,7 @@ from flask import Flask, redirect
 
 app = Flask(__name__)
 
-# LISTA INTEGRAL DE CANAIS
+# LISTA DE CANAIS
 CANAIS = {
     "cazetv": "http://918197185.com/live/595f428ca7b51f3c37480c96db6e5d8a/d205a045c9c6799d56b9/116845.ts",
     "espn1": "http://918197185.com/live/595f428ca7b51f3c37480c96db6e5d8a/d205a045c9c6799d56b9/130912.ts",
@@ -43,14 +43,21 @@ CANAIS = {
     "xsports2": "http://918197185.com:80/live/a1f10d0bca4a5b077a0520250416100028/a75db139b01845e1c314/132276.ts",
 }
 
-USER_AGENTS = ["tvbox-v4.0.0", "python-requests/2.31.0"]
-HEADERS_BASE = {"Icy-MetaData": "1", "Accept-Encoding": "identity", "Connection": "Keep-Alive"}
-ULTIMA_RENOVACAO = {}
-COOLDOWN = 30 
+# USER-AGENTS
+USER_AGENTS = [
+    "tvbox-v4.0.0",
+    "python-requests/2.31.0"
+]
 
-@app.route('/')
-def home():
-    return "Servidor Online! Use /nome-do-canal para acessar."
+HEADERS_BASE = {
+    "Icy-MetaData": "1",
+    "Accept-Encoding": "identity",
+    "Connection": "Keep-Alive"
+}
+
+# CONTROLE DE COOLDOWN
+ULTIMA_RENOVACAO = {}
+COOLDOWN = 30  # segundos (se quiser, depois testamos 60)
 
 @app.route('/<canal>')
 def renovar_canal(canal):
@@ -58,25 +65,36 @@ def renovar_canal(canal):
         return "Canal não encontrado", 404
 
     agora = time.time()
+
+    # BLOQUEIA LOOP DE RENOVAÇÃO
     if canal in ULTIMA_RENOVACAO:
         if agora - ULTIMA_RENOVACAO[canal] < COOLDOWN:
-            # Em vez de erro, redirecionamos para o último link conhecido se for rápido demais
-            pass 
+            return "Aguardando cooldown", 429
 
     for ua in USER_AGENTS:
         try:
             headers = HEADERS_BASE.copy()
             headers["User-Agent"] = ua
-            response = requests.get(CANAIS[canal], headers=headers, allow_redirects=False, timeout=8)
+
+            response = requests.get(
+                CANAIS[canal],
+                headers=headers,
+                allow_redirects=False,
+                timeout=8
+            )
+
             novo_link = response.headers.get("Location")
+
             if novo_link:
                 ULTIMA_RENOVACAO[canal] = agora
+                print(f"{canal} renovado com UA [{ua}]")
                 return redirect(novo_link)
+
         except Exception as e:
             print(f"Erro com UA {ua}: {e}")
 
-    # Se falhar o redirecionamento, tenta abrir o link original direto
-    return redirect(CANAIS[canal])
+    return "Erro: nenhum User-Agent gerou token", 500
 
-# Exportar a app para a Vercel
-app.debug = True
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
