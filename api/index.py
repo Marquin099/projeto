@@ -1,10 +1,10 @@
 import requests
 import time
-from flask import Flask, Response, stream_with_context
+from flask import Flask, redirect
 
 app = Flask(__name__)
 
-# LISTA INTEGRAL DE CANAIS - TODOS OS 35 MANTIDOS
+# LISTA INTEGRAL DE CANAIS - TODOS OS 39 MANTIDOS
 CANAIS = {
     "cazetv": "http://918197185.com/live/595f428ca7b51f3c37480c96db6e5d8a/d205a045c9c6799d56b9/116845.ts",
     "espn1": "http://918197185.com:80/live/a1f10d0bca4a5b077a0520250416100028/a75db139b01845e1c314/131579.ts",
@@ -47,28 +47,8 @@ CANAIS = {
     "xsports1": "http://918197185.com:80/live/a1f10d0bca4a5b077a0520250416100028/a75db139b01845e1c314/106761.ts",
 }
 
-def stream_canal(url_base):
-    headers = {
-        "User-Agent": "tvbox-v4.0.0",
-        "Icy-MetaData": "1",
-        "Connection": "keep-alive"
-    }
-    
-    # 1. Resolver token/redirecionamento silenciosamente no servidor
-    try:
-        r_token = requests.get(url_base, headers=headers, allow_redirects=False, timeout=10)
-        url_final = r_token.headers.get("Location") or url_base
-    except:
-        url_final = url_base
-
-    # 2. Abrir conexão estável e repassar dados
-    try:
-        with requests.get(url_final, headers=headers, stream=True, timeout=15) as r:
-            for chunk in r.iter_content(chunk_size=256*1024): # Buffer de 256KB
-                if chunk:
-                    yield chunk
-    except Exception as e:
-        print(f"Erro no stream: {e}")
+# Cache para armazenar os links finais e evitar renovações excessivas
+cache_links = {}
 
 @app.route('/')
 def home():
@@ -79,12 +59,36 @@ def serve_canal(canal):
     if canal not in CANAIS:
         return "Canal não encontrado", 404
     
-    # Inicia a ponte de dados sem redirecionar o player
-    return Response(
-        stream_with_context(stream_canal(CANAIS[canal])),
-        mimetype='video/mp2t',
-        headers={"Content-Disposition": "attachment; filename=canal.ts"}
-    )
+    agora = time.time()
+    url_base = CANAIS[canal]
+    
+    # Verifica se já temos o link final no cache e se ele tem menos de 5 minutos (300 seg)
+    if canal in cache_links:
+        link_salvo, tempo_salvo = cache_links[canal]
+        if agora - tempo_salvo < 300:
+            return redirect(link_salvo)
+
+    # Caso não tenha cache ou expirou, busca novo link
+    headers = {
+        "User-Agent": "tvbox-v4.0.0",
+        "Icy-MetaData": "1",
+        "Connection": "keep-alive"
+    }
+    
+    try:
+        # Faz uma requisição rápida apenas para pegar o cabeçalho de redirecionamento
+        r = requests.get(url_base, headers=headers, allow_redirects=False, timeout=5)
+        url_final = r.headers.get("Location")
+        
+        if url_final:
+            cache_links[canal] = (url_final, agora)
+            return redirect(url_final)
+        else:
+            # Se não redirecionou, usa o original
+            return redirect(url_base)
+            
+    except Exception as e:
+        return redirect(url_base) # Se der erro, tenta o original como última tentativa
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, threaded=True)
+    app.run(host='0.0.0.0', port=5000)
