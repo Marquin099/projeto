@@ -1,6 +1,6 @@
 import requests
 import time
-from flask import Flask, redirect
+from flask import Flask, redirect, make_response
 
 app = Flask(__name__)
 
@@ -47,48 +47,45 @@ CANAIS = {
     "xsports1": "http://918197185.com:80/live/a1f10d0bca4a5b077a0520250416100028/a75db139b01845e1c314/106761.ts",
 }
 
-# Cache para armazenar os links finais e evitar renovações excessivas
-cache_links = {}
+# Cache global simples
+cache_final = {}
 
 @app.route('/')
 def home():
-    return "Servidor Online! Use /nome-do-canal"
+    return "Servidor IPTV Online. Use /nome-do-canal"
 
 @app.route('/<canal>')
-def serve_canal(canal):
+def get_canal(canal):
     if canal not in CANAIS:
-        return "Canal não encontrado", 404
-    
-    agora = time.time()
-    url_base = CANAIS[canal]
-    
-    # Verifica se já temos o link final no cache e se ele tem menos de 5 minutos (300 seg)
-    if canal in cache_links:
-        link_salvo, tempo_salvo = cache_links[canal]
-        if agora - tempo_salvo < 300:
-            return redirect(link_salvo)
+        return "Canal Inexistente", 404
 
-    # Caso não tenha cache ou expirou, busca novo link
-    headers = {
-        "User-Agent": "tvbox-v4.0.0",
-        "Icy-MetaData": "1",
-        "Connection": "keep-alive"
-    }
+    agora = time.time()
     
+    # Se o canal estiver no cache e tiver menos de 1 minuto, redireciona direto
+    # Reduzimos o tempo de cache para evitar que o token expire na mão do player
+    if canal in cache_final:
+        url_cache, tempo = cache_final[canal]
+        if agora - tempo < 60:
+            return redirect(url_cache)
+
+    # Caso contrário, busca o link real (resolve o redirecionamento do token)
+    headers = {"User-Agent": "tvbox-v4.0.0"}
     try:
-        # Faz uma requisição rápida apenas para pegar o cabeçalho de redirecionamento
-        r = requests.get(url_base, headers=headers, allow_redirects=False, timeout=5)
-        url_final = r.headers.get("Location")
+        r = requests.get(CANAIS[canal], headers=headers, allow_redirects=False, timeout=5)
+        url_real = r.headers.get("Location")
         
-        if url_final:
-            cache_links[canal] = (url_final, agora)
-            return redirect(url_final)
-        else:
-            # Se não redirecionou, usa o original
-            return redirect(url_base)
-            
-    except Exception as e:
-        return redirect(url_base) # Se der erro, tenta o original como última tentativa
+        if url_real:
+            cache_final[canal] = (url_real, agora)
+            # Criamos uma resposta de redirecionamento que proíbe cache no player
+            response = make_response(redirect(url_real))
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response
+        
+        return redirect(CANAIS[canal])
+    except:
+        return redirect(CANAIS[canal])
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
