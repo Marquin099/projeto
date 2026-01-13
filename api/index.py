@@ -89,49 +89,56 @@ CANAIS = {
     "lesbian": "http://918197185.com:80/live/a1f10d0bca4a5b077a0520250416100028/a75db139b01845e1c314/104888.ts",
 }
 
-# Cache global simples
+# Cache global otimizado
 cache_final = {}
 
 @app.route('/')
 def home():
-    return "Servidor IPTV Online. Use /nome-do-canal.ts"
+    return "Servidor IPTV Online. Acesse os canais via nome-do-canal.ts"
 
 @app.route('/<path:canal>')
 def get_canal(canal):
-    # Compatibilidade com Nextv: remove o .ts se o player enviar
-    id_canal = canal.replace('.ts', '')
+    # Garante que o ID do canal seja extraído corretamente para conferir no dicionário
+    id_canal = canal.replace('.ts', '').lower()
     
     if id_canal not in CANAIS:
         return "Canal Inexistente", 404
 
     agora = time.time()
     
-    # Cache otimizado para evitar travamentos e expiração de token
+    # Cache aumentado para 120 segundos para evitar erro 429 nos seus logs
     if id_canal in cache_final:
         url_cache, tempo = cache_final[id_canal]
-        if agora - tempo < 45:
+        if agora - tempo < 120:
             return redirect(url_cache)
 
-    headers = {"User-Agent": "tvbox-v4.0.0"}
+    # Headers para estabilizar a conexão e simular TV Box
+    headers = {
+        "User-Agent": "tvbox-v4.0.0",
+        "Connection": "keep-alive"
+    }
+    
     try:
-        # Busca o link real ignorando redirecionamentos automáticos
-        r = requests.get(CANAIS[id_canal], headers=headers, allow_redirects=False, timeout=5)
+        # Aumentamos o timeout para evitar "Connection timed out" no PuTTY
+        r = requests.get(CANAIS[id_canal], headers=headers, allow_redirects=False, timeout=8)
         url_real = r.headers.get("Location")
         
         if url_real:
             cache_final[id_canal] = (url_real, agora)
             response = make_response(redirect(url_real))
-            # Headers para compatibilidade total e anti-travamento
+            # Headers anti-travamento para players como o Nextv
             response.headers['Content-Type'] = 'video/mp2t'
-            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-            response.headers['Pragma'] = 'no-cache'
-            response.headers['Expires'] = '0'
+            response.headers['Cache-Control'] = 'public, max-age=120'
+            response.headers['Connection'] = 'keep-alive'
+            response.headers['X-Content-Type-Options'] = 'nosniff'
             return response
         
-        # Fallback se não houver redirecionamento
         return redirect(CANAIS[id_canal])
+        
     except:
+        # Fallback direto em caso de erro na rede
         return redirect(CANAIS[id_canal])
 
 if __name__ == '__main__':
+    # Rodando em 0.0.0.0 para ser acessível externamente
     app.run(host='0.0.0.0', port=5000)
