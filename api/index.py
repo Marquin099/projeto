@@ -1,10 +1,10 @@
 import requests
 import time
-from flask import Flask, redirect, make_response, Response, stream_with_context
+from flask import Flask, redirect, make_response
 
 app = Flask(__name__)
 
-# LISTA INTEGRAL DE TODOS OS SEUS CANAIS MAPEADOS
+# LISTA INTEGRAL DE CANAIS (MANTIDA EXATAMENTE COMO A SUA)
 CANAIS = {
     "cazetv": "http://918197185.com/live/595f428ca7b51f3c37480c96db6e5d8a/d205a045c9c6799d56b9/116845.ts",
     "espn1": "http://918197185.com:80/live/a1f10d0bca4a5b077a0520250416100028/a75db139b01845e1c314/131579.ts",
@@ -74,64 +74,49 @@ CANAIS = {
     "lesbian": "http://918197185.com:80/live/a1f10d0bca4a5b077a0520250416100028/a75db139b01845e1c314/104888.ts",
 }
 
-headers_padrao = {
-    "User-Agent": "tvbox-v4.0.0",
-    "Accept": "*/*",
-    "Connection": "keep-alive"
-}
+# Cache para evitar bloqueio 429
+cache_final = {}
 
 @app.route('/')
 def home():
-    return "Servidor Online! Todos os canais mapeados."
+    return "Servidor Online! Use /nome-do-canal.ts para acessar."
 
+# Rota configurada para aceitar .ts no final
 @app.route('/<canal_ts>')
 def get_canal(canal_ts):
+    # Remove o .ts para conferir no dicionário CANAIS
     id_canal = canal_ts.replace('.ts', '').lower()
     
     if id_canal not in CANAIS:
         return f"Canal '{id_canal}' não encontrado.", 404
 
-    # LÓGICA DE SELEÇÃO:
-    # Canais que costumam dar 'loop' ou travar usam o Modo Proxy.
-    # Adicionei os principais de esporte nesta lista.
-    canais_proxy = ["espn", "sportv", "premiere", "tnt", "space", "ufc", "bandsports"]
+    agora = time.time()
     
-    if any(x in id_canal for x in canais_proxy):
-        return modo_proxy(CANAIS[id_canal])
-    
-    # Para os demais (incluindo o que funcionou por 27 min), modo redirect estável.
-    return modo_redirect(CANAIS[id_canal])
+    # Cache curto para estabilidade
+    if id_canal in cache_final:
+        url_cache, tempo = cache_final[id_canal]
+        if agora - tempo < 20:
+            return redirect(url_cache)
 
-def modo_redirect(url_origem):
+    headers = {"User-Agent": "tvbox-v4.0.0"}
+    
     try:
-        # Busca o redirecionamento com timeout curto para não travar
-        r = requests.get(url_origem, headers=headers_padrao, allow_redirects=False, timeout=8)
-        target = r.headers.get("Location", url_origem)
+        # Busca o redirecionamento real
+        r = requests.get(CANAIS[id_canal], headers=headers, allow_redirects=False, timeout=8)
+        url_real = r.headers.get("Location")
         
-        response = make_response(redirect(target))
-        # Headers para evitar cache no player
-        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
-        return response
+        if url_real:
+            cache_final[id_canal] = (url_real, agora)
+            response = make_response(redirect(url_real))
+            # Garante que o player não guarde lixo em cache
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Content-Type'] = 'video/mp2t'
+            return response
+        
+        return redirect(CANAIS[id_canal])
+        
     except:
-        return redirect(url_origem)
-
-def modo_proxy(url_origem):
-    """
-    Modo Proxy: Abre o fluxo direto e repassa ao player.
-    Resolve o problema de voltar o vídeo (loop) e travas constantes.
-    """
-    def generate():
-        # Aumentamos o timeout e usamos stream=True para fluxo contínuo
-        with requests.get(url_origem, headers=headers_padrao, stream=True, timeout=20) as r:
-            # Repassa os dados em pequenos blocos (chunks)
-            for chunk in r.iter_content(chunk_size=256*1024):
-                if chunk:
-                    yield chunk
-
-    return Response(stream_with_context(generate()), content_type='video/mp2t')
+        return redirect(CANAIS[id_canal])
 
 if __name__ == '__main__':
-    # threaded=True é crucial para permitir múltiplos canais abertos ao mesmo tempo
-    app.run(host='0.0.0.0', port=5000, threaded=True)
+    app.run(host='0.0.0.0', port=5000)
